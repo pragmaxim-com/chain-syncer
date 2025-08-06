@@ -29,10 +29,40 @@ impl<FB: Send + Sync + 'static, TB: BlockLike + 'static> ChainSyncer<FB, TB> {
         let chain_tip_for_persist = chain_tip_header.clone();
 
         type Batch<T> = (Vec<T>, usize);
-        let (tx, mut rx) = mpsc::channel::<Batch<TB>>(8);
+        let (fetch_tx, mut fetch_rx) = mpsc::channel::<FB>(8);
+        let (proc_tx, mut proc_rx) = mpsc::channel::<Batch<TB>>(8);
 
+        // Fetch stage
+        let fetch_provider = Arc::clone(&self.block_provider);
+        let fetch_handle = tokio::spawn(async move {
+            fetch_provider
+                .stream(chain_tip_header.clone(), last_header)
+                .await
+                .for_each(|block| {
+                    let fetch_tx = fetch_tx.clone();
+                    async move {
+                        fetch_tx.send(block).await.expect("Processor dropped fetch channel");
+                    }
+                })
+                .await;
+        });
+
+        // Process + batch stage
+        let process_provider = Arc::clone(&self.block_provider);
+        let process_handle = tokio::spawn(async move {
+            let mut stream =
+                futures::stream::poll_fn(|cx| fetch_rx.poll_recv(cx))
+                    .map(|block| process_provider.process_block(&block).expect("Failed to process block"))
+                    .min_batch_with_weight(min_batch_size, |block| block.weight() as usize);
+
+            while let Some(batch) = stream.next().await {
+                proc_tx.send(batch).await.expect("Persistence worker dropped processing channel");
+            }
+        });
+
+        // Persist stage
         let persist_handle = tokio::spawn(async move {
-            while let Some((block_batch, batch_weight)) = rx.recv().await {
+            while let Some((block_batch, batch_weight)) = proc_rx.recv().await {
                 let chain_link = block_batch.last().is_some_and(|curr_block| curr_block.header().height() + 100 > chain_tip_for_persist.height());
 
                 let last_block = block_batch.last().expect("Block batch should not be empty");
@@ -45,23 +75,8 @@ impl<FB: Send + Sync + 'static, TB: BlockLike + 'static> ChainSyncer<FB, TB> {
             }
         });
 
-        // Processing + batching stage
-        self.block_provider
-            .stream(chain_tip_header.clone(), last_header)
-            .await
-            .map(|block| self.block_provider.process_block(&block).expect("Failed to process block"))
-            .min_batch_with_weight(min_batch_size, |block| block.weight() as usize)
-            .for_each(|(block_batch, batch_weight)| {
-                let tx = tx.clone();
-                async move {
-                    // Send to persistence worker without blocking processing
-                    tx.send((block_batch, batch_weight)).await.expect("Persistence worker dropped");
-                }
-            })
-            .await;
-
-        // Wait for persistence to finish
-        drop(tx); // close channel
+        fetch_handle.await.expect("Fetcher failed");
+        process_handle.await.expect("Processor failed");
         persist_handle.await.expect("Persistence worker failed");
     }
 
