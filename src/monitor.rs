@@ -1,5 +1,7 @@
-use std::{cell::RefCell, time::Instant};
+use std::{time::Instant};
 use crate::info;
+
+use std::sync::Mutex;
 
 pub type BatchWeight = usize;
 pub type BoxWeight = usize;
@@ -7,15 +9,26 @@ pub type BoxWeight = usize;
 pub struct ProgressMonitor {
     min_weight_report: usize,
     start_time: Instant,
-    total_and_last_report_weight: RefCell<(usize, usize)>,
+    total_and_last_report_weight: Mutex<(usize, usize)>,
 }
 
 impl ProgressMonitor {
     pub fn new(min_tx_count_report: usize) -> Self {
-        ProgressMonitor { min_weight_report: min_tx_count_report, start_time: Instant::now(), total_and_last_report_weight: RefCell::new((0, 0)) }
+        ProgressMonitor {
+            min_weight_report: min_tx_count_report,
+            start_time: Instant::now(),
+            total_and_last_report_weight: Mutex::new((0, 0)),
+        }
     }
-    pub fn log(&self, height: u32, timestamp: u32, batch_size: usize, batch_weight: &BatchWeight) {
-        let mut total_weight = self.total_and_last_report_weight.borrow_mut();
+
+    pub fn log(
+        &self,
+        height: u32,
+        timestamp: u32,
+        batch_size: usize,
+        batch_weight: &BatchWeight,
+    ) {
+        let mut total_weight = self.total_and_last_report_weight.lock().unwrap();
         let new_total_weight = total_weight.0 + batch_weight;
         if new_total_weight > total_weight.1 + self.min_weight_report {
             *total_weight = (new_total_weight, new_total_weight);

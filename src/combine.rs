@@ -9,14 +9,14 @@ pub async fn futures(future_a: impl Future<Output = ()>, future_b: impl Future<O
     let combined_fut = join(future_a, future_b);
 
     tokio::select! {
-            _ = sigint.recv() => {
-                println!("Received SIGINT, shutting down...");
-            }
-            _ = sigterm.recv() => {
-                println!("Received SIGTERM, shutting down...");
-            }
-            _ = combined_fut => {
-
-            }
+        _ = sigint.recv() => {
+            println!("Received SIGINT, shutting down...");
         }
+        _ = sigterm.recv() => {
+            println!("Received SIGTERM, shutting down...");
+        }
+        _ = combined_fut => {
+
+        }
+    }
 }

@@ -61,7 +61,7 @@ pub trait BlockLike: Send + Sync {
     fn weight(&self) -> u32;
 }
 
-pub trait BlockPersistence<B: BlockLike> {
+pub trait BlockPersistence<B: BlockLike>: Send + Sync {
     fn get_last_header(&self) -> Result<Option<B::Header>, ChainSyncError>;
     fn get_header_by_hash(&self, hash: [u8; 32]) -> Result<Vec<B::Header>, ChainSyncError>;
     fn store_blocks(&self, blocks: Vec<B>) -> Result<(), ChainSyncError>;
@@ -69,7 +69,7 @@ pub trait BlockPersistence<B: BlockLike> {
 }
 
 #[async_trait]
-pub trait BlockProvider<FB: Send, TB: BlockLike> {
+pub trait BlockProvider<FB: Send, TB: BlockLike>: Send + Sync {
     fn process_block(&self, block: &FB) -> Result<TB, ChainSyncError>;
     fn get_processed_block(&self, header: TB::Header) -> Result<TB, ChainSyncError>;
     async fn get_chain_tip(&self) -> Result<TB::Header, ChainSyncError>;
