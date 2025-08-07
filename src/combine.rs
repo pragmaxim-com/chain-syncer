@@ -1,22 +1,25 @@
-use futures::future::join;
 use std::future::Future;
+use futures::future::join;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::watch;
 
-pub async fn futures(future_a: impl Future<Output = ()>, future_b: impl Future<Output = ()>) {
+pub async fn futures<A, B, OA, OB>(future_a: A, future_b: B, shutdown_tx: watch::Sender<bool>)
+where
+    A: Future<Output = OA> + Send + 'static,
+    B: Future<Output = OB> + Send + 'static,
+{
     let mut sigint = signal(SignalKind::interrupt()).expect("Failed to listen for SIGINT");
     let mut sigterm = signal(SignalKind::terminate()).expect("Failed to listen for SIGTERM");
-
-    let combined_fut = join(future_a, future_b);
 
     tokio::select! {
         _ = sigint.recv() => {
             println!("Received SIGINT, shutting down...");
+            let _ = shutdown_tx.send(true);
         }
         _ = sigterm.recv() => {
             println!("Received SIGTERM, shutting down...");
+            let _ = shutdown_tx.send(true);
         }
-        _ = combined_fut => {
-
-        }
+        _ = join(future_a, future_b) => {}
     }
 }

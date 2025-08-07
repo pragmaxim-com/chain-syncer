@@ -7,6 +7,7 @@ use futures::StreamExt;
 use min_batch::ext::MinBatchExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use crate::settings::IndexerSettings;
 
 pub struct ChainSyncer<FB: Send + Sync + 'static, TB: BlockLike + 'static> {
     pub block_provider: Arc<dyn BlockProvider<FB, TB>>,
@@ -19,7 +20,7 @@ impl<FB: Send + Sync + 'static, TB: BlockLike + 'static> ChainSyncer<FB, TB> {
         Self { block_provider, block_persistence, monitor: Arc::new(ProgressMonitor::new(1000)) }
     }
 
-    pub async fn sync(&self, min_batch_size: usize, _processing_par: usize) {
+    pub async fn sync(&self, indexer_conf: IndexerSettings) {
         let block_provider = Arc::clone(&self.block_provider);
         let persistence = Arc::clone(&self.block_persistence);
         let monitor = Arc::clone(&self.monitor);
@@ -53,7 +54,7 @@ impl<FB: Send + Sync + 'static, TB: BlockLike + 'static> ChainSyncer<FB, TB> {
             let mut stream =
                 futures::stream::poll_fn(|cx| fetch_rx.poll_recv(cx))
                     .map(|block| process_provider.process_block(&block).expect("Failed to process block"))
-                    .min_batch_with_weight(min_batch_size, |block| block.weight() as usize);
+                    .min_batch_with_weight(indexer_conf.min_batch_size, |block| block.weight() as usize);
 
             while let Some(batch) = stream.next().await {
                 proc_tx.send(batch).await.expect("Persistence worker dropped processing channel");
