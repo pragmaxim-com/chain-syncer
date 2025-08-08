@@ -30,36 +30,28 @@ impl<FB: Send + Sync + 'static, TB: BlockLike + 'static> ChainSyncer<FB, TB> {
         let chain_tip_for_persist = chain_tip_header.clone();
 
         type Batch<T> = (Vec<T>, usize);
-        let (fetch_tx, mut fetch_rx) = mpsc::channel::<FB>(8);
         let (proc_tx, mut proc_rx) = mpsc::channel::<Batch<TB>>(8);
 
-        // Fetch stage
-        let fetch_provider = Arc::clone(&self.block_provider);
-        let fetch_handle = tokio::spawn(async move {
-            fetch_provider
-                .stream(chain_tip_header.clone(), last_header)
-                .await
-                .for_each(|block| {
-                    let fetch_tx = fetch_tx.clone();
-                    async move {
-                        fetch_tx.send(block).await.expect("Processor dropped fetch channel");
-                    }
-                })
-                .await;
-        });
+        // Process + batch stage (consumes provider.stream() directly)
+        let process_handle = {
+            let indexer_conf = indexer_conf.clone();
+            let block_provider = Arc::clone(&self.block_provider);
 
-        // Process + batch stage
-        let process_provider = Arc::clone(&self.block_provider);
-        let process_handle = tokio::spawn(async move {
-            let mut stream =
-                futures::stream::poll_fn(|cx| fetch_rx.poll_recv(cx))
-                    .map(|block| process_provider.process_block(&block).expect("Failed to process block"))
-                    .min_batch_with_weight(indexer_conf.min_batch_size, |block| block.weight() as usize);
+            tokio::spawn(async move {
+                let mut stream =
+                    block_provider
+                        .stream(chain_tip_header.clone(), last_header)
+                        .map(|block| block_provider.process_block(&block).expect("Failed to process block"))
+                        .min_batch_with_weight(indexer_conf.min_batch_size, |block| block.weight() as usize);
 
-            while let Some(batch) = stream.next().await {
-                proc_tx.send(batch).await.expect("Persistence worker dropped processing channel");
-            }
-        });
+                while let Some(batch) = stream.next().await {
+                    proc_tx
+                        .send(batch)
+                        .await
+                        .expect("Persistence worker dropped processing channel");
+                }
+            })
+        };
 
         // Persist stage
         let persist_handle = tokio::spawn(async move {
@@ -71,12 +63,15 @@ impl<FB: Send + Sync + 'static, TB: BlockLike + 'static> ChainSyncer<FB, TB> {
                 let timestamp = last_block.header().timestamp();
 
                 monitor.log(height, timestamp, block_batch.len(), &batch_weight);
-                Self::persist_blocks(block_batch, chain_link, Arc::clone(&block_provider), Arc::clone(&persistence))
+                // Move blocking IO off the async executor
+                let block_provider = Arc::clone(&block_provider);
+                let persistence = Arc::clone(&persistence);
+                tokio::task::spawn_blocking(move || Self::persist_blocks(block_batch, chain_link, block_provider, persistence))
+                    .await.expect("join")
                     .unwrap_or_else(|e| panic!("Unable to persist blocks due to {}", e.error));
             }
         });
 
-        fetch_handle.await.expect("Fetcher failed");
         process_handle.await.expect("Processor failed");
         persist_handle.await.expect("Persistence worker failed");
     }

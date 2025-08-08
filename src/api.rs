@@ -73,5 +73,5 @@ pub trait BlockProvider<FB: Send, TB: BlockLike>: Send + Sync {
     fn process_block(&self, block: &FB) -> Result<TB, ChainSyncError>;
     fn get_processed_block(&self, header: TB::Header) -> Result<TB, ChainSyncError>;
     async fn get_chain_tip(&self) -> Result<TB::Header, ChainSyncError>;
-    async fn stream(&self, chain_tip_header: TB::Header, last_header: Option<TB::Header>) -> Pin<Box<dyn Stream<Item = FB> + Send + 'life0>>;
+    fn stream(&self, chain_tip_header: TB::Header, last_header: Option<TB::Header>) -> Pin<Box<dyn Stream<Item = FB> + Send + 'static>>;
 }

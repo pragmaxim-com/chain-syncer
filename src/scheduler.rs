@@ -22,10 +22,8 @@ impl<FB: Send + Sync + 'static, TB: BlockLike + 'static> Scheduler<FB, TB> {
         loop {
             tokio::select! {
                 _ = shutdown.changed() => {
-                    if *shutdown.borrow() {
-                        println!("Shutting down syncer ...");
-                        break;
-                    }
+                    println!("Shutting down syncer ...");
+                    break;
                 }
                 _ = interval.tick() => {
                     self.syncer.sync(indexer_conf.clone()).await;
